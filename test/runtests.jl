@@ -46,11 +46,14 @@ using Documenter
     @test eltype(SequentialOutputChannel(5)) === Any
     @test eltype(SequentialOutputChannel{Int}(5)) === Int
     @testset "Test Errors" begin
+        @test_throws "must be a positive Integer" SequentialOutputChannel(0)
         c = SequentialOutputChannel{Int}(1)
         put!(c, 1, 1)
         @test_throws "The entry with idx 1 is already present" put!(c, 1, 1) 
         take!(c)
         @test_throws "idx 1 has already been consumed" put!(c, 1, 1)
+        close(c)
+        @test_throws "SequentialOutputChannel is closed" SequentialOutputChannels.check_channel_state(c)
     end
     @testset "Show" begin
         T = Int
@@ -61,6 +64,8 @@ using Documenter
         @test sprint((io, x) -> show(io, MIME"text/plain"(), x), c) === "SequentialOutputChannel{$(T)}(5) (next value not available)"
         put!(c, 1, 1)
         @test sprint((io, x) -> show(io, MIME"text/plain"(), x), c) === "SequentialOutputChannel{$(T)}(5) (2 items available)"
+        close(c)
+        @test sprint((io, x) -> show(io, MIME"text/plain"(), x), c) === "SequentialOutputChannel{$(T)}(5) (closed)"
     end
     @testset "Ordered with @spawn" begin
     n = 55
