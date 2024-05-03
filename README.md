@@ -12,14 +12,18 @@ using Random: randperm
 using SequentialOutputChannels
 
 n = 15
-c = SequentialOutputChannel{Int}(n)
+c = SequentialOutputChannel{Int}(5)
 # We put indices in random order
-for i in randperm(n)
-    put!(c, i, i) # third arugment represents the priority/idx
-end
-out = Int[]
-for _ in 1:n
-    push!(out, take!(c)) # outputs are always generated in sequential (idx) order from take!
+@sync begin
+    for i in 1:n
+        @spawn let
+            sleep(rand()/10)
+            put!(c, i, i)
+        end
+    end
+    @spawn for i in 1:n
+        push!(out, take!(c))
+    end
 end
 # The output should be sorted
 @test issorted(out)
