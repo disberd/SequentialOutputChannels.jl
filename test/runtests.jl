@@ -3,6 +3,7 @@ using Test
 using Aqua
 using Random: randperm
 using Base.Threads: @spawn
+using Documenter
 
 # Aqua.test_all(SequentialOutputChannels)
 
@@ -45,7 +46,7 @@ using Base.Threads: @spawn
     @test eltype(SequentialOutputChannel(5)) === Any
     @test eltype(SequentialOutputChannel{Int}(5)) === Int
     @testset "Test Errors" begin
-        c = SequentialOutputChannel{Int}(5)
+        c = SequentialOutputChannel{Int}(1)
         put!(c, 1, 1)
         @test_throws "The entry with idx 1 is already present" put!(c, 1, 1) 
         take!(c)
@@ -77,5 +78,9 @@ using Base.Threads: @spawn
         end
     end
     @test issorted(out)
+    end
+    @testset "DocTests" begin
+        DocMeta.setdocmeta!(SequentialOutputChannels, :DocTestSetup, :(using SequentialOutputChannels); recursive=true)
+        Documenter.doctest(SequentialOutputChannels; manual = false)
     end
 end

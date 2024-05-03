@@ -5,6 +5,44 @@ using Base: concurrency_violation, notify_error, InvalidStateException
 export SequentialOutputChannel
 
 # This is mostly adapted from the SequentialOutputChannel definition in Base
+
+"""
+    SequentialOutputChannel{T=Any}(size::Int)
+
+Constructs a `SequentialOutputChannel` with an internal buffer that can hold a maximum of `size` objects
+of type `T`.
+This is similar to SequentialOutputChannel but it does not extracts object in the order they were inserted, but in sequential order of priority/index.
+
+The channel keeps internally a buffer capable of containing up to the next `size` objects from the last consumed index.
+
+Each object inserted in the channel must be assigned a unique index/priority when calling [`put!`](@ref). Indices are unique so no two objects can be inserted with the same index. When trying to insert an object with an index that is more than `size` indices away from the last consumed one, the `put!` call will block until enough indices have been consumed by the channel.
+
+Calls to [`take!`](@ref) will always return the inserted objects in increasing index (without gaps, i.e. the differences between indices of two subsequent `take!` calls is always 1). If the next index to be consumed has not been put yet in the channel, the [`take!`](@ref) call will block until the next index is inserted.
+
+# Examples
+```jldoctest
+julia> c = SequentialOutputChannel{Int}(5)
+SequentialOutputChannel{Int64}(5) (empty)
+
+julia> out = Int[];
+
+julia> @sync begin
+            n = 15
+            for i in 1:n 
+                Threads.@spawn let
+                    sleep(rand()/10) # This make the outputs come out of order
+                    put!(c, i, i)
+                end
+            end
+            Threads.@spawn for i in 1:n
+                push!(out, take!(c))
+            end
+        end;
+
+julia> issorted(out)
+true
+```
+"""
 mutable struct SequentialOutputChannel{T}
     cond_take::Threads.Condition                 # waiting for data to become available
     cond_put::Threads.Condition                  # waiting for a writeable slot
@@ -121,6 +159,25 @@ function _put!(c::SequentialOutputChannel, v, idx::Int)
 end
 
 
+"""
+    take!(c::SequentialOutputChannel)
+
+Removes and returns a value from a [`SequentialOutputChannel`](@ref) in order of index/priority (as provided to [`put!`](@ref)). Blocks until data is available.
+
+# Examples
+
+Buffered channel:
+```jldoctest
+julia> c = SequentialOutputChannel(2);
+
+julia> put!(c, :second, 2); # Inserted first but with index 2
+
+julia> put!(c, :first, 1);
+
+julia> take!(c)
+:first
+```
+"""
 Base.take!(c::SequentialOutputChannel) = _take!(c)
 
 function _take!(c::SequentialOutputChannel)
@@ -131,7 +188,8 @@ function _take!(c::SequentialOutputChannel)
             wait(c.cond_take)
         end
         # We circshift the buffer to have all other elements gets up the list and extract the last element (which was the first one before the shift)
-        v = last(circshift!(c.data, -1))
+        v = first(c.data)
+        circshift!(c.data, -1)
         # We circshift the mask as well and tag the last position as containing invalid data
         circshift!(c.valid_data, -1)[end] = false
         # Decrease available and increase last outputted idx
