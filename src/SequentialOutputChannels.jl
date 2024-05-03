@@ -127,12 +127,12 @@ function _locked_put!(c::SequentialOutputChannel, v, idx::Int)
     check_channel_state(c)
     last_out = c.last_output_idx
     idx <= last_out && error("SequentialOutputChannel: idx $idx has already been consumed from the channel")
-    offset_from_last = idx - last_out
     did_buffer = false
-    if offset_from_last <= c.sz_max
-        c.valid_data[offset_from_last] && error("The entry with idx $idx is already present in the SequentialOutputChannel's buffer")
-        c.valid_data[offset_from_last] = true
-        c.data[offset_from_last] = v
+    if idx - last_out <= c.sz_max
+        ri = running_index(idx, c.sz_max)
+        c.valid_data[ri] && error("The entry with idx $idx is already present in the SequentialOutputChannel's buffer")
+        c.valid_data[ri] = true
+        c.data[ri] = v
         did_buffer = true
     end
     return did_buffer
@@ -145,8 +145,7 @@ function _put!(c::SequentialOutputChannel, v, idx::Int)
         while !(_locked_put!(c, v, idx))
             wait(c.cond_put)
         end
-        new_avail = findfirst(!, c.valid_data)
-        new_avail = new_avail === nothing ? c.sz_max : new_avail - 1
+        new_avail = _compute_n_avail(c)
         @atomic :monotonic c.n_avail_items = new_avail
         if new_avail > 0
             # We notify only the first listener as we do not envisage supporting fetch for this channel
@@ -187,18 +186,19 @@ function _take!(c::SequentialOutputChannel)
             check_channel_state(c)
             wait(c.cond_take)
         end
-        # We circshift the buffer to have all other elements gets up the list and extract the last element (which was the first one before the shift)
-        v = first(c.data)
-        circshift!(c.data, -1)
-        # We circshift the mask as well and tag the last position as containing invalid data
-        circshift!(c.valid_data, -1)[end] = false
+        # We find the running index within the buffer
+        new_output = last_output_idx(c) + 1
+        ri = running_index(new_output, c.sz_max)
+        # Extract te corresponding element
+        v = c.data[ri]
+        # Set to false the corresponding flag as it will now represents a future index
+        c.valid_data[ri] = false
         # Decrease available and increase last outputted idx
         new_avail = c.n_avail_items - 1
         @atomic :monotonic c.n_avail_items = new_avail
         if new_avail > 0
             notify(c.cond_take, nothing, false, false)
         end
-        new_output = c.last_output_idx + 1
         @atomic :monotonic c.last_output_idx = new_output
         # We notify all put! listeners, as we don't know which one, if any, has the right idx to be put in
         notify(c.cond_put, nothing, true, false)
@@ -207,6 +207,12 @@ function _take!(c::SequentialOutputChannel)
         unlock(c)
     end
 end
+
+function running_index(index, sz)
+    ri = index % sz
+    return ri === 0 ? sz : ri
+end
+
 
 """
     isready(c::SequentialOutputChannel)
@@ -240,7 +246,23 @@ function Base.isempty(c::SequentialOutputChannel)
         !any(c.valid_data)
     end
 end
+
+# This assumes that we have the lock, do not use outside of lock condition
+function _compute_n_avail(c::SequentialOutputChannel)
+    sz = c.sz_max
+    last_idx = last_output_idx(c)
+    out = 0
+    for i in 1:sz
+        idx = i + last_idx
+        ri = running_index(idx, sz)
+        c.valid_data[ri] || return out
+        out += 1
+    end
+    return out
+end
+
 n_avail(c::SequentialOutputChannel) = @atomic :monotonic c.n_avail_items
+last_output_idx(c::SequentialOutputChannel) = @atomic :monotonic c.last_output_idx
 
 Base.eltype(::Type{SequentialOutputChannel{T}}) where {T} = T
 
